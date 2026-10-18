@@ -4,8 +4,8 @@ mod tea_kind;
 mod milk_tea;
 use crate::base::{Serialize};
 use crate::milk_tea::Milktea;
-use crate::tea_size::TeaSizeName;
-use crate::tea_kind::TeaKindName;
+use crate::tea_size::{TeaSizeName};
+use crate::tea_kind::{TeaKindName};
 
 
 fn main() {
