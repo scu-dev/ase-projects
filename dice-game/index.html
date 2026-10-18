@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173f35">
+  <meta name="description" content="投掷两颗骰子，点数之和为 7 即获胜。使用浏览器密码学安全随机数。">
+  <link rel="icon" href="data:,">
+  <title>七点好运 | 双骰子游戏</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #263b32;
+      background: #f5f4ef;
+      font-synthesis: none;
+      --muted: #79837b;
+      --line: #e3e6dd;
+      --green: #173f35;
+      --lime: #c5ef9b;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, summary { -webkit-tap-highlight-color: transparent; }
+    button { font: inherit; cursor: pointer; }
+    button:disabled { cursor: default; }
+    button:focus-visible, summary:focus-visible, a:focus-visible {
+      outline: 3px solid #7ba66a;
+      outline-offset: 5px;
+    }
+    button, a, summary { touch-action: manipulation; }
+    h1, h2, h3, p { margin: 0; }
+    button, a, summary { -webkit-user-select: none; user-select: none; }
+    .app { width: min(100% - 64px, 1000px); margin: 0 auto; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 37px;
+      height: 37px;
+      border-radius: 12px;
+      background: var(--green);
+      color: var(--lime);
+      font: italic 29px Georgia, serif;
+      transform: rotate(-8deg);
+    }
+    .brand-name { font-size: 17px; font-weight: 700; letter-spacing: 2px; }
+    .edition { color: var(--muted); font-size: 12px; letter-spacing: 2px; }
+    .intro { padding: 40px 0 30px; }
+    .eyebrow { color: #74836c; font-size: 11px; font-weight: 650; letter-spacing: 3px; }
+    h1 {
+      margin: 12px 0 13px;
+      font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+      font-size: clamp(28px, 4.2vw, 43px);
+      font-weight: 700;
+      letter-spacing: 1px;
+      line-height: 1.4;
+    }
+    .intro p { color: #788078; font-size: 14px; line-height: 1.8; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; }
+    .game {
+      position: relative;
+      overflow: hidden;
+      padding: 25px 32px 24px;
+      border-radius: 24px;
+      color: #f4f6ee;
+      background: var(--green);
+      background-image: radial-gradient(ellipse at 50% 35%, #2a5745 0%, transparent 70%);
+      box-shadow: 0 16px 35px -25px #173f3580;
+    }
+    .game-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .game-status { font-size: 12px; color: #c0d2be; display: flex; align-items: center; gap: 8px; }
+    .status-dot { width: 6px; height: 6px; background: var(--lime); border-radius: 50%; }
+    .round { font-size: 11px; color: #c0d2be; font-variant-numeric: tabular-nums; letter-spacing: 1px; }
+    .dice-stage { display: flex; align-items: center; justify-content: center; gap: 52px; padding: 42px 0 27px; }
+    .die-wrap { text-align: center; min-width: 0; }
+    .die-wrap:first-child { --tilt: -9deg; }
+    .die-wrap:last-child { --tilt: 10deg; }
+    .die {
+      position: relative;
+      width: 112px;
+      height: 112px;
+      border-radius: 23px;
+      background: #faf8eb;
+      color: #214b3a;
+      transform: rotate(var(--tilt));
+      border: 1px solid #ffffffb3;
+      box-shadow: inset 0 3px 2px #ffffff, inset 0 -5px 1px #d5d7bc, 0 8px 0 #bfc5a8, 0 20px 25px #061f3055;
+    }
+    .die-wrap:last-child .die {
+      background: #f3b897;
+      color: #78432d;
+      border-color: #ffcfb1;
+      box-shadow: inset 0 3px 2px #ffd7bb, inset 0 -5px 1px #dc9577, 0 8px 0 #bc7a60, 0 20px 25px #061f3055;
+    }
+    .pips { display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr); gap: 9px; padding: 23px; height: 100%; }
+    .pip { border-radius: 50%; background: currentColor; visibility: hidden; box-shadow: inset 0 2px 2px #00000024; }
+    .die:is([data-value="1"], [data-value="3"], [data-value="5"]) .pip:nth-child(5),
+    .die:is([data-value="2"], [data-value="3"], [data-value="4"], [data-value="5"], [data-value="6"]) .pip:is(:nth-child(1), :nth-child(9)),
+    .die:is([data-value="4"], [data-value="5"], [data-value="6"]) .pip:is(:nth-child(3), :nth-child(7)),
+    .die[data-value="6"] .pip:is(:nth-child(4), :nth-child(6)) { visibility: visible; }
+    .unknown { display: none; position: absolute; inset: 0; place-items: center; opacity: .25; font: 52px Georgia, serif; }
+    .die[data-value="0"] .unknown { display: grid; }
+    .die-label { margin-top: 25px; color: #a2b9a7; font-size: 10px; letter-spacing: 2px; }
+    .equation { display: flex; align-items: center; justify-content: center; gap: 19px; height: 49px; font-size: 24px; font-variant-numeric: tabular-nums; }
+    .operator { font-size: 18px; color: #96b29e; }
+    .sum { display: grid; place-items: center; min-width: 47px; height: 44px; border-radius: 12px; background: #ffffff0c; font-weight: 700; }
+    .outcome { text-align: center; padding: 20px 0 23px; min-height: 100px; }
+    .outcome h2 { font-size: 20px; font-weight: 600; line-height: 1.5; }
+    .outcome p { margin-top: 7px; font-size: 12px; color: #abc1ae; line-height: 1.6; }
+    .roll-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      min-height: 54px;
+      border: 0;
+      border-radius: 13px;
+      background: var(--lime);
+      color: #214333;
+      font-weight: 700;
+      font-size: 16px;
+      transition: background .16s, transform .16s;
+    }
+    .roll-button:hover:not(:disabled) { background: #d4f6b3; transform: translateY(-1px); }
+    .roll-button:active:not(:disabled) { transform: translateY(1px); }
+    .roll-button:disabled { opacity: .62; }
+    .roll-icon { font-size: 23px; line-height: 1; }
+    .keyboard-hint { text-align: center; color: #91ad99; font-size: 11px; padding-top: 14px; }
+    kbd { font: inherit; padding: 2px 5px; border: 1px solid #ffffff26; border-radius: 4px; margin: 0 3px; }
+    .game[data-state="win"] .sum { background: var(--lime); color: var(--green); }
+    .game[data-state="win"] .outcome h2 { color: var(--lime); }
+    .game[data-state="error"] .outcome h2 { color: #ffc5a9; }
+    .game[data-state="rolling"] .die { animation: tumble .2s ease-in-out infinite alternate; }
+    .game[data-state="rolling"] .die-wrap:last-child .die { animation-direction: alternate-reverse; }
+    @keyframes tumble {
+      from { transform: translateY(-7px) rotate(-20deg) scale(.96); }
+      to { transform: translateY(3px) rotate(22deg) scale(1.02); }
+    }
+    .sidebar { display: flex; flex-direction: column; gap: 19px; }
+    .rules { padding: 25px; border: 1px solid var(--line); border-radius: 21px; background: #fbfbf7; flex: 1; }
+    .section-label { font-size: 12px; font-weight: 600; letter-spacing: 1px; }
+    .target { display: flex; align-items: baseline; gap: 12px; margin: 14px 0 5px; }
+    .target strong { font: 76px/.95 Georgia, serif; letter-spacing: -5px; color: #2f593e; }
+    .target span { font-size: 12px; color: var(--muted); }
+    .rule-copy { margin-top: 17px; font-size: 14px; line-height: 1.9; }
+    .rule-copy strong { color: #397544; }
+    .pairs { display: flex; gap: 7px; margin-top: 18px; }
+    .pair { flex: 1; text-align: center; padding: 8px 0; background: #edf0e6; border-radius: 7px; font-size: 12px; color: #63785c; }
+    .probability { display: flex; justify-content: space-between; border-top: 1px solid var(--line); margin-top: 22px; padding-top: 17px; font-size: 12px; color: var(--muted); }
+    .probability strong { color: #425d43; font-weight: 600; }
+    .stats { padding: 21px 23px; border: 1px solid var(--line); border-radius: 20px; }
+    .stats-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .reset-button { border: 0; background: transparent; padding: 4px 0 4px 7px; color: #7c8875; font-size: 11px; }
+    .reset-button:hover:not(:disabled) { color: #315c3d; text-decoration: underline; }
+    .reset-button:disabled { opacity: .4; }
+    .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 22px; }
+    .stat { min-width: 0; }
+    .stat strong { display: block; font-size: 23px; font-weight: 600; letter-spacing: -.6px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .stat span { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+    .history { margin-top: 30px; }
+    .history-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+    .history-heading span { color: #8d9488; font-size: 11px; }
+    .history-empty { padding: 23px 0; color: #959b90; font-size: 12px; }
+    .history-list { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 9px; padding: 0; margin: 15px 0 0; list-style: none; }
+    .history-item { border: 1px solid var(--line); background: #fafaf6; border-radius: 11px; padding: 11px 8px; text-align: center; }
+    .history-item.is-win { background: #e7f0db; border-color: #d1e1bc; }
+    .history-item span { display: block; color: #939d8c; font-size: 10px; }
+    .history-item strong { display: block; font-size: 14px; font-weight: 600; padding: 7px 0 5px; white-space: nowrap; }
+    .history-item small { color: #85907d; font-size: 10px; }
+    .history-item.is-win small { color: #3a713a; }
+    .footer { display: flex; align-items: flex-start; gap: 24px; justify-content: space-between; border-top: 1px solid var(--line); margin-top: 27px; padding: 21px 0 28px; }
+    .random-details { font-size: 11px; color: #84907d; max-width: 690px; }
+    .random-details summary { cursor: pointer; width: fit-content; }
+    .random-details p { line-height: 1.9; margin-top: 13px; color: #798373; }
+    .random-details code { font: 11px Consolas, monospace; overflow-wrap: anywhere; }
+    .random-details a { color: #4a7044; text-underline-offset: 3px; }
+    .footer-note { flex-shrink: 0; color: #9a9f94; font-size: 11px; line-height: 1.5; }
+    noscript { display: block; padding: 16px; color: #9c4c30; background: #fff0e4; text-align: center; }
+
+    @media (max-width: 760px) {
+      .app { width: min(100% - 36px, 560px); }
+      .header { padding: 22px 0; }
+      .edition { font-size: 10px; letter-spacing: 1px; }
+      .intro { padding: 28px 0 23px; }
+      .layout { grid-template-columns: 1fr; gap: 18px; }
+      .game { padding: 23px 25px; }
+      .sidebar { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .rules, .stats { padding: 20px; }
+      .target strong { font-size: 55px; }
+      .target { margin-top: 17px; }
+      .rule-copy { font-size: 12px; }
+      .pairs { gap: 4px; margin-top: 12px; }
+      .pair { font-size: 10px; padding: 6px 0; }
+      .probability { margin-top: 15px; padding-top: 14px; gap: 6px; font-size: 10px; }
+      .stats-heading { flex-wrap: wrap; }
+      .reset-button { padding-left: 0; }
+      .stat-grid { grid-template-columns: 1fr; gap: 18px; margin-top: 19px; }
+      .stat { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+      .stat strong { font-size: 22px; order: 1; }
+      .stat span { margin: 0; }
+      .history-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .footer { gap: 15px; }
+      .footer-note { font-size: 10px; }
+      .keyboard-hint { display: none; }
+    }
+
+    @media (max-width: 380px) {
+      .app { width: calc(100% - 28px); }
+      h1 { font-size: 27px; letter-spacing: 0; }
+      .intro p { font-size: 12px; }
+      .dice-stage { gap: 34px; }
+      .die { width: 96px; height: 96px; border-radius: 20px; }
+      .pips { padding: 20px; gap: 7px; }
+      .rules, .stats { padding: 16px; }
+      .rule-copy { font-size: 11px; }
+      .probability { flex-wrap: wrap; }
+      .history-item strong { font-size: 12px; }
+      .footer { flex-direction: column; gap: 10px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <noscript>请启用 JavaScript 后投掷骰子。</noscript>
+  <div class="app">
+    <header class="header">
+      <div class="brand">
+        <span class="brand-mark">7</span>
+        <span class="brand-name">七点好运</span>
+      </div>
+      <span class="edition">A LITTLE GAME OF CHANCE</span>
+    </header>
+
+    <main>
+      <div class="intro">
+        <div class="eyebrow">TWO DICE. ONE LUCKY NUMBER.</div>
+        <h1>好运，恰好是 7 点。</h1>
+        <p>两颗骰子，一次机会。点数相加为 7，这局你就赢。</p>
+      </div>
+
+      <div class="layout">
+        <section class="game" id="game" data-state="ready">
+          <div class="game-header">
+            <span class="game-status"><span class="status-dot"></span><span id="game-status">准备就绪</span></span>
+            <span class="round" id="round">等待第一局</span>
+          </div>
+
+          <div class="dice-stage">
+            <div class="die-wrap">
+              <div class="die" id="die-one" data-value="0">
+                <div class="pips"><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span></div>
+                <span class="unknown">?</span>
+              </div>
+              <div class="die-label">骰子 01</div>
+            </div>
+            <div class="die-wrap">
+              <div class="die" id="die-two" data-value="0">
+                <div class="pips"><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span></div>
+                <span class="unknown">?</span>
+              </div>
+              <div class="die-label">骰子 02</div>
+            </div>
+          </div>
+
+          <div class="equation">
+            <span id="value-one">—</span>
+            <span class="operator">+</span>
+            <span id="value-two">—</span>
+            <span class="operator">=</span>
+            <span class="sum" id="sum">?</span>
+          </div>
+          <div class="outcome">
+            <h2 id="result">这一次，会是 7 吗？</h2>
+            <p id="result-detail">点击下方按钮，让骰子给出答案。</p>
+          </div>
+          <button class="roll-button" id="roll-button" type="button" disabled>
+            <span class="roll-icon">⚄</span><span id="roll-label">投掷骰子</span>
+          </button>
+          <p class="keyboard-hint">也可以按 <kbd>空格</kbd> 投掷</p>
+        </section>
+
+        <aside class="sidebar">
+          <section class="rules">
+            <h2 class="section-label">规则，只需一条</h2>
+            <div class="target"><strong>7</strong><span>你的幸运点数</span></div>
+            <p class="rule-copy">两颗骰子的点数之和<br><strong>等于 7，你赢；</strong>否则，你输。</p>
+            <div class="pairs"><span class="pair">1 + 6</span><span class="pair">2 + 5</span><span class="pair">3 + 4</span></div>
+            <div class="probability"><span>每一局的获胜概率</span><strong>1 / 6 ≈ 16.67%</strong></div>
+          </section>
+          <section class="stats">
+            <div class="stats-heading">
+              <h2 class="section-label">本次游戏</h2>
+              <button class="reset-button" id="reset-button" type="button" disabled>重新开始 ↗</button>
+            </div>
+            <div class="stat-grid">
+              <div class="stat"><strong id="total-rounds">0</strong><span>已玩局数</span></div>
+              <div class="stat"><strong id="total-wins">0</strong><span>获胜局数</span></div>
+              <div class="stat"><strong id="win-rate">—</strong><span>实际胜率</span></div>
+            </div>
+          </section>
+        </aside>
+      </div>
+
+      <section class="history">
+        <div class="history-heading">
+          <h2 class="section-label">好运的足迹</h2>
+          <span>最近 8 局 / 最新在前</span>
+        </div>
+        <p class="history-empty" id="history-empty">这里还很安静，先掷出你的第一局吧。</p>
+        <ol class="history-list" id="history-list"></ol>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <details class="random-details">
+        <summary>密码学安全随机数 / 了解随机来源</summary>
+        <p>每局通过 Web Crypto API 的 <code>crypto.getRandomValues()</code> 获取随机数。这是普通网页可直接使用的密码学安全随机接口，通常由操作系统熵源播种的密码学伪随机生成器提供。网页无法直接指定或验证硬件真随机源。</p>
+        <p>每个随机字节只接受 0–251，再等概率映射为 1–6；252–255 会被丢弃并重新取数，避免取模偏差。两颗骰子分别取样，动画不参与结果计算。安全随机接口不可用时停止投掷。<a href="https://www.w3.org/TR/webcrypto/#Crypto-interface" target="_blank" rel="noreferrer">查看 Web Crypto 规范 ↗</a></p>
+      </details>
+      <span class="footer-note">记录仅保留在当前页面</span>
+    </footer>
+  </div>
+
+  <script>
+    "use strict";
+
+    const ui = Object.fromEntries([
+      "game", "game-status", "round", "die-one", "die-two", "value-one", "value-two",
+      "sum", "result", "result-detail", "roll-button", "roll-label", "reset-button",
+      "total-rounds", "total-wins", "win-rate", "history-empty", "history-list"
+    ].map((id) => [id, document.getElementById(id)]));
+
+    const supportsSecureRandom = typeof globalThis.crypto?.getRandomValues === "function";
+    let rolling = false;
+    let rounds = 0;
+    let wins = 0;
+
+    function drawDice() {
+      const dice = [];
+      const bytes = new Uint8Array(2);
+
+      while (dice.length < 2) {
+        globalThis.crypto.getRandomValues(bytes);
+
+        for (const byte of bytes) {
+          // 252 = 6 × 42: each face has exactly 42 accepted byte values.
+          if (byte < 252) dice.push((byte % 6) + 1);
+          if (dice.length === 2) break;
+        }
+      }
+
+      return dice;
+    }
+
+    function showFaces(first, second) {
+      ui["die-one"].dataset.value = String(first);
+      ui["die-two"].dataset.value = String(second);
+    }
+
+    function clearEquation() {
+      ui["value-one"].textContent = "—";
+      ui["value-two"].textContent = "—";
+      ui.sum.textContent = "?";
+    }
+
+    function showRandomError() {
+      ui.game.dataset.state = "error";
+      ui["game-status"].textContent = "安全随机数不可用";
+      ui.result.textContent = "暂时无法投掷";
+      ui["result-detail"].textContent = "无法获取安全随机数，请使用支持 Web Crypto 的浏览器重试。";
+      ui["roll-label"].textContent = supportsSecureRandom ? "重试投掷" : "浏览器不支持";
+      ui["roll-button"].disabled = !supportsSecureRandom;
+      showFaces(0, 0);
+      clearEquation();
+    }
+
+    function recordRound(first, second, won) {
+      const item = document.createElement("li");
+      item.className = "history-item" + (won ? " is-win" : "");
+
+      const roundLabel = document.createElement("span");
+      roundLabel.textContent = "第 " + rounds + " 局";
+      const equation = document.createElement("strong");
+      equation.textContent = first + " + " + second + " = " + (first + second);
+      const outcome = document.createElement("small");
+      outcome.textContent = won ? "赢了" : "输了";
+
+      item.append(roundLabel, equation, outcome);
+      ui["history-list"].prepend(item);
+      while (ui["history-list"].children.length > 8) {
+        ui["history-list"].lastElementChild.remove();
+      }
+      ui["history-empty"].hidden = true;
+    }
+
+    function finishRoll(first, second) {
+      const sum = first + second;
+      const won = sum === 7;
+      rounds += 1;
+      if (won) wins += 1;
+
+      showFaces(first, second);
+      ui["value-one"].textContent = String(first);
+      ui["value-two"].textContent = String(second);
+      ui.sum.textContent = String(sum);
+      ui.game.dataset.state = won ? "win" : "lose";
+      ui["game-status"].textContent = "本局已揭晓";
+      ui.result.textContent = won ? "正好 7 点，你赢了！" : sum + " 点，这局你输了";
+      ui["result-detail"].textContent = won ? "恰到好处的好运。下一局，继续试试？" : "每一局都是新的机会，再掷一次吧。";
+      ui["total-rounds"].textContent = String(rounds);
+      ui["total-wins"].textContent = String(wins);
+      ui["win-rate"].textContent = Math.round(wins / rounds * 100) + "%";
+      ui["roll-label"].textContent = "再掷一次";
+      recordRound(first, second, won);
+
+      rolling = false;
+      ui["roll-button"].disabled = false;
+      ui["reset-button"].disabled = false;
+    }
+
+    function roll() {
+      if (rolling || !supportsSecureRandom) return;
+
+      let dice;
+      try {
+        // Draw the actual result once. Animation frames never alter it.
+        dice = drawDice();
+      } catch {
+        showRandomError();
+        return;
+      }
+
+      rolling = true;
+      ui["roll-button"].disabled = true;
+      ui["reset-button"].disabled = true;
+      ui["roll-label"].textContent = "投掷中…";
+      ui.game.dataset.state = "rolling";
+      ui["game-status"].textContent = "骰子滚动中";
+      ui.round.textContent = "第 " + (rounds + 1) + " 局";
+      ui.result.textContent = "让好运转一会儿";
+      ui["result-detail"].textContent = "两颗骰子，即将揭晓。";
+      clearEquation();
+
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        finishRoll(dice[0], dice[1]);
+        return;
+      }
+
+      let frame = 0;
+      showFaces(1, 5);
+      const animation = window.setInterval(() => {
+        frame += 1;
+        showFaces((frame % 6) + 1, ((frame + 3) % 6) + 1);
+      }, 85);
+
+      window.setTimeout(() => {
+        window.clearInterval(animation);
+        finishRoll(dice[0], dice[1]);
+      }, 680);
+    }
+
+    function resetGame() {
+      if (rolling) return;
+
+      rounds = 0;
+      wins = 0;
+      ui.game.dataset.state = "ready";
+      ui["game-status"].textContent = "准备就绪";
+      ui.round.textContent = "等待第一局";
+      ui.result.textContent = "这一次，会是 7 吗？";
+      ui["result-detail"].textContent = "点击下方按钮，让骰子给出答案。";
+      ui["roll-label"].textContent = "投掷骰子";
+      ui["total-rounds"].textContent = "0";
+      ui["total-wins"].textContent = "0";
+      ui["win-rate"].textContent = "—";
+      ui["history-list"].replaceChildren();
+      ui["history-empty"].hidden = false;
+      ui["reset-button"].disabled = true;
+      showFaces(0, 0);
+      clearEquation();
+    }
+
+    ui["roll-button"].addEventListener("click", roll);
+    ui["reset-button"].addEventListener("click", resetGame);
+    document.addEventListener("keydown", (event) => {
+      if (event.code !== "Space" || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.target instanceof Element && event.target.closest("button, a, summary, input, select, textarea, [contenteditable]")) return;
+      event.preventDefault();
+      roll();
+    });
+
+    if (supportsSecureRandom) {
+      ui["roll-button"].disabled = false;
+    } else {
+      showRandomError();
+    }
+  </script>
+</body>
+</html>
