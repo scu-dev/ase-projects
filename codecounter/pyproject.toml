@@ -1,0 +1,7 @@
+[project]
+name = "codecounter"
+version = "0.1.0"
+description = "A local code counter with a Tkinter interface."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []

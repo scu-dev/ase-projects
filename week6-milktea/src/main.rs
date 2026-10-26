@@ -9,6 +9,12 @@ use crate::tea_kind::{TeaKindName};
 
 
 fn main() {
-    let a = Milktea::new(TeaKindName::Green, TeaSizeName::Large);
-    println!("Price of {} {} Milktea: ${:.2}", a.size.serialize(), a.kind.serialize(), a.price());
+    let a: [Milktea; 3] = [
+        Milktea::new(TeaKindName::Green, TeaSizeName::Large),
+        Milktea::new(TeaKindName::Black, TeaSizeName::Medium),
+        Milktea::new(TeaKindName::Oolong, TeaSizeName::Small)
+    ];
+    for m in a {
+        println!("Price of {} {} milktea: ${:.2}", m.size.serialize(), m.kind.serialize(), m.price());
+    }
 }

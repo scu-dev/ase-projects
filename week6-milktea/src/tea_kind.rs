@@ -3,6 +3,7 @@ use crate::base::{PriceModInfo, ModPrice, Serialize};
 pub(crate) enum TeaKindName {
     Black,
     Green,
+    Oolong,
 }
 
 pub(crate) struct TeaKind {
@@ -21,6 +22,10 @@ impl TeaKind {
                 name,
                 price_mod: PriceModInfo::Add(6.0),
             },
+            TeaKindName::Oolong => TeaKind {
+                name,
+                price_mod: PriceModInfo::Add(7.0),
+            },
         }
     }
 }
@@ -30,6 +35,7 @@ impl Serialize for TeaKind {
         match self.name {
             TeaKindName::Black => "Black".to_string(),
             TeaKindName::Green => "Green".to_string(),
+            TeaKindName::Oolong => "Oolong".to_string(),
         }
     }
 }

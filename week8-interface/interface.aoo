@@ -1,0 +1,47 @@
+import std:io:println;
+
+trait Vehicle {
+    void move();
+    void stop();
+}
+
+type Car {
+    Car new() => Car {};
+
+    trait Vehicle {
+        void move() {
+            println("The car is moving.");
+        }
+        void stop() {
+            println("The car has stopped.");
+        }
+    }
+}
+
+type Ship {
+    Ship new() => Ship {};
+
+    trait Vehicle {
+        void move() {
+            println("The ship is sailing.");
+        }
+        void stop() {
+            println("The ship has anchored.");
+        }
+    }
+}
+
+i32 main() {
+    auto car = Car:new();
+    auto ship = Ship:new();
+    Vehicle* a = &car;
+    auto b = &ship as Vehicle*;
+
+    a->move();
+    b->move();
+
+    a->stop();
+    b->stop();
+
+    return 0;
+}
