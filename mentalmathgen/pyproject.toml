@@ -1,0 +1,10 @@
+[project]
+name = "mentalmathgen"
+version = "0.1.0"
+description = "A configurable mental math worksheet generator with a Tkinter interface."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["reportlab>=4.4,<5"]
+
+[dependency-groups]
+dev = ["pypdf>=6,<7"]
