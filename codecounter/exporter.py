@@ -6,6 +6,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from counter import COLUMNS, ScanResult
+from html_report import render_html
 
 
 _SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -56,6 +57,10 @@ def export_csv(result: ScanResult, path: Path) -> None:
     writer.writerow(title for _, title in COLUMNS)
     writer.writerows(item.row() for item in result.languages.values())
     _write_atomic(path, output.getvalue().removesuffix("\n").encode("utf-8-sig"))
+
+
+def export_html(result: ScanResult, path: Path, directory: Path) -> None:
+    _write_atomic(path, render_html(result, directory).encode("utf-8"))
 
 
 def _xml(root: Element) -> bytes:

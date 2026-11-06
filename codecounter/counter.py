@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean, median
@@ -38,6 +38,11 @@ STARTS = {
     "C#": re.compile(r"""//|/\*|(?:\$+@?|@\$?)?"{3,}|(?:\$@|@\$|@|\$)?"|'"""),
 }
 TOKENS = re.compile(r"[^\W\d]\w*|\d+\w*|::|=>|->|&&|\.\.\.|[^\s]", re.UNICODE)
+PYTHON_FUNCTION = re.compile(
+    r"(?:async(?:\s|\\\n)+)?"
+    r"def(?:\s|\\\n)+[^\W\d]\w*(?:\s|\\\n)*"
+    r"(?:\[[^\]]*\](?:\s|\\\n)*)?\("
+)
 NON_FUNCTIONS = {
     "if", "for", "foreach", "while", "switch", "catch", "using", "lock",
     "fixed", "sizeof", "alignof", "decltype", "noexcept", "throw", "throws",
@@ -52,7 +57,11 @@ class Counts:
     code: int = 0
     blank: int = 0
     comment: int = 0
-    functions: int = 0
+    function_lines: list[int] = field(default_factory=list[int])
+
+    @property
+    def functions(self) -> int:
+        return len(self.function_lines)
 
 
 @dataclass
@@ -62,32 +71,34 @@ class LanguageStats:
     code: int = 0
     blank: int = 0
     comment: int = 0
-    functions: int = 0
-    code_per_file: list[int] = field(default_factory=list[int], repr=False)
+    function_lines: list[int] = field(default_factory=list[int], repr=False)
+
+    @property
+    def functions(self) -> int:
+        return len(self.function_lines)
 
     def add(self, counts: Counts) -> None:
         self.files += 1
         self.code += counts.code
         self.blank += counts.blank
         self.comment += counts.comment
-        self.functions += counts.functions
-        self.code_per_file.append(counts.code)
+        self.function_lines.extend(counts.function_lines)
 
     @property
     def maximum(self) -> int:
-        return max(self.code_per_file, default=0)
+        return max(self.function_lines, default=0)
 
     @property
     def minimum(self) -> int:
-        return min(self.code_per_file, default=0)
+        return min(self.function_lines, default=0)
 
     @property
     def average(self) -> float:
-        return mean(self.code_per_file) if self.code_per_file else 0.0
+        return mean(self.function_lines) if self.function_lines else 0.0
 
     @property
     def median(self) -> float:
-        return median(self.code_per_file) if self.code_per_file else 0.0
+        return median(self.function_lines) if self.function_lines else 0.0
 
     def row(self) -> tuple[str, int, int, int, int, int, int, int, str, str]:
         return (
@@ -230,7 +241,7 @@ def _token_end(text: str, match: re.Match[str], language: str, cancel: Event | N
     )
 
 
-def _lex(text: str, language: str, cancel: Event | None) -> tuple[Counts, str]:
+def _lex(text: str, language: str, cancel: Event | None) -> tuple[Counts, str, list[int]]:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     line_count = text.count("\n") + int(bool(text) and not text.endswith("\n"))
     flags = bytearray(line_count)
@@ -248,7 +259,14 @@ def _lex(text: str, language: str, cancel: Event | None) -> tuple[Counts, str]:
                     flags[current_line] |= 2
             if index < len(parts) - 1:
                 current_line += 1
-        cleaned.append(segment if kind == "code" else "\n".join(" " * len(p) for p in parts))
+        if kind == "code":
+            cleaned.append(segment)
+        elif language == "Python" and kind == "string":
+            # One expression with the same line span, even for a docstring ending at column zero.
+            closing = ")" if parts[-1] else ""
+            cleaned.append("(" + "\n" * (len(parts) - 1) + closing)
+        else:
+            cleaned.append("\n".join(" " * len(p) for p in parts))
 
     pos = 0
     while (match := STARTS[language].search(text, pos)) is not None:
@@ -269,12 +287,16 @@ def _lex(text: str, language: str, cancel: Event | None) -> tuple[Counts, str]:
         emit(text[start:end], kind)
         pos = end
     emit(text[pos:], "code")
+    # prefix[i] is the number of code lines before physical line i (zero-based).
+    prefix = [0]
+    for flag in flags:
+        prefix.append(prefix[-1] + bool(flag & 2))
     counts = Counts(
-        code=sum(bool(flag & 2) for flag in flags),
+        code=prefix[-1],
         blank=flags.count(0),
         comment=sum(flag == 1 for flag in flags),
     )
-    return counts, "".join(cleaned)
+    return counts, "".join(cleaned), prefix
 
 
 def _pairs(tokens: list[str]) -> dict[int, int]:
@@ -362,18 +384,72 @@ def _body_after(tokens: list[str], closing: int, pairs: dict[int, int], language
     return None
 
 
-def count_functions(cleaned: str, language: str) -> int:
+def _python_function_ranges(cleaned: str) -> Iterator[tuple[int, int]]:
+    """Yield half-open physical line ranges, closing suites at the next logical dedent."""
+    active: list[tuple[int, int]] = []  # indentation, first line
+    offset = 0
+    depth = 0
+    continued = False
+    lines = cleaned.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    for number, line in enumerate(lines):
+        content = line.lstrip(" \t\f")
+        if content and not continued:
+            leading = len(line) - len(content)
+            indent = len(line[:leading].rsplit("\f", 1)[-1].expandtabs())
+            while active and indent <= active[-1][0]:
+                yield active.pop()[1], number
+            if PYTHON_FUNCTION.match(cleaned, offset + leading):
+                active.append((indent, number))
+        depth += line.count("(") + line.count("[") + line.count("{")
+        depth -= line.count(")") + line.count("]") + line.count("}")
+        continued = depth > 0 or line.endswith("\\")
+        offset += len(line) + 1
+    while active:
+        yield active.pop()[1], len(lines)
+
+
+def _expression_end(tokens: list[str], body: int, pairs: dict[int, int]) -> int:
+    """C# expression bodies end at the semicolon outside any nested expression."""
+    index = body + 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == ";":
+            return index
+        if token == "}":
+            return index - 1
+        if token in ("(", "[", "{") and index in pairs:
+            index = pairs[index]
+        index += 1
+    return len(tokens) - 1
+
+
+def _function_ranges(cleaned: str, language: str) -> Iterator[tuple[int, int]]:
     if language == "Python":
-        # Token boundaries remain intact after comments and strings are masked.
-        return len(re.findall(r"\bdef\s+[^\W\d]\w*\s*(?:\[[^\]]*\]\s*)?\(", cleaned))
+        yield from _python_function_ranges(cleaned)
+        return
     if language in ("C", "C++"):
-        cleaned = re.sub(r"(?m)^[ \t]*#(?:[^\n]*\\\n)*[^\n]*", "", cleaned)
-    tokens = TOKENS.findall(cleaned)
+        cleaned = re.sub(
+            r"(?m)^[ \t]*#(?:[^\n]*\\\n)*[^\n]*",
+            lambda match: "\n" * match.group().count("\n"), cleaned,
+        )
+    tokens: list[str] = []
+    lines: list[int] = []
+    for number, line in enumerate(cleaned.split("\n")):
+        line_tokens: list[str] = TOKENS.findall(line)
+        tokens.extend(line_tokens)
+        lines.extend([number] * len(line_tokens))
     pairs = _pairs(tokens)
     bodies: set[int] = set()
     boundary = 0
     for opening, token in enumerate(tokens):
         if token in (";", "{", "}"):
+            boundary = opening + 1
+        elif (
+            language == "C++" and token == ":" and opening > 0
+            and tokens[opening - 1] in ("public", "protected", "private")
+        ):
             boundary = opening + 1
         if token != "(" or opening not in pairs:
             continue
@@ -394,18 +470,29 @@ def count_functions(cleaned: str, language: str) -> int:
         if any(word in prefix for word in ("=", "return", "new", "class", "struct", "record", "interface", "enum", "union")):
             continue
         body = _body_after(tokens, pairs[opening], pairs, language)
-        if body is not None:
-            bodies.add(body)
-    return len(bodies)
+        if body is None or body in bodies:
+            continue
+        bodies.add(body)
+        if tokens[body] == "{":
+            end = pairs.get(body, len(tokens) - 1)
+        else:
+            end = _expression_end(tokens, body, pairs)
+        yield lines[boundary], lines[end] + 1
+
+
+def count_functions(cleaned: str, language: str) -> int:
+    return sum(1 for _ in _function_ranges(cleaned, language))
 
 
 def count_source(data: bytes, language: str, cancel: Event | None = None) -> Counts:
     if language not in LANGUAGES:
         raise ValueError(f"Unsupported language: {language}")
     _check_cancel(cancel)
-    counts, cleaned = _lex(decode_source(data), language, cancel)
+    counts, cleaned, prefix = _lex(decode_source(data), language, cancel)
     _check_cancel(cancel)
-    counts.functions = count_functions(cleaned, language)
+    for start, stop in _function_ranges(cleaned, language):
+        _check_cancel(cancel)
+        counts.function_lines.append(prefix[stop] - prefix[start])
     return counts
 
 

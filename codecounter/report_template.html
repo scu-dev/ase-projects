@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$page_title — CodeCounter 统计报告</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #202f3c;
+      --muted: #617180;
+      --line: #dde5eb;
+      --blue: #3569c8;
+      --code: #3569c8;
+      --comment: #158279;
+      --blank: #d6a653;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #f4f7fa;
+      color: var(--ink);
+      font: 15px/1.65 "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+    main { max-width: 1240px; margin: 0 auto; padding: 42px 32px 24px; }
+    .brand { margin: 0 0 10px; color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .14em; }
+    h1 { margin: 0; font-size: 30px; line-height: 1.4; letter-spacing: -.03em; }
+    h2 { margin: 0; font-size: 18px; }
+    p { margin: 0; }
+    .source { margin-top: 8px; color: var(--muted); overflow-wrap: anywhere; }
+    .source strong { color: var(--ink); font-weight: 500; }
+    .status { display: inline-block; margin-top: 16px; padding: 4px 10px; border-radius: 5px; font-size: 13px; }
+    .complete { color: #206c5a; background: #e4f2ec; }
+    .partial { color: #875a18; background: #fff0d6; }
+    .overview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 26px 0; }
+    .metric { background: white; border: 1px solid var(--line); border-radius: 10px; padding: 17px 22px; }
+    .metric-label { color: var(--muted); font-size: 13px; }
+    .metric-value { margin-top: 3px; font-size: 32px; font-weight: 650; line-height: 1.3; }
+    .panel { margin-top: 20px; padding: 24px; background: white; border: 1px solid var(--line); border-radius: 10px; }
+    .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+    .description { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .control { display: flex; align-items: center; gap: 8px; flex-shrink: 0; font-size: 13px; }
+    select { color: var(--ink); background: white; border: 1px solid #c9d4df; border-radius: 6px; padding: 7px 30px 7px 10px; font: inherit; cursor: pointer; }
+    select:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+    .function-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; padding: 20px 0; margin: 18px 0 8px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .function-stat { display: flex; flex-direction: column; gap: 4px; }
+    .function-stat span { color: var(--muted); font-size: 12px; }
+    .function-stat strong { font-size: 21px; font-weight: 600; }
+    .histogram-head, .histogram-row { display: grid; grid-template-columns: 108px minmax(0, 1fr) 86px 70px; gap: 14px; align-items: center; }
+    .histogram-head { padding: 12px 0 8px; font-size: 12px; color: var(--muted); }
+    .histogram-head span:nth-child(n+3), .histogram-row .number, .histogram-row .percent { text-align: right; }
+    .histogram-row { padding: 8px 0; font-size: 13px; }
+    .histogram-track { height: 23px; background: #f0f4fa; border-radius: 3px; overflow: hidden; }
+    .histogram-bar { height: 100%; background: var(--blue); border-radius: 3px; }
+    .percent { color: var(--muted); }
+    .chart-note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+    .empty { margin-top: 16px; padding: 12px 16px; border-radius: 6px; background: #f4f7fa; color: var(--muted); font-size: 13px; }
+    [hidden] { display: none !important; }
+    .legend { display: flex; flex-wrap: wrap; gap: 22px; margin: 22px 0 18px; color: var(--muted); font-size: 12px; }
+    .legend span { display: inline-flex; align-items: center; gap: 7px; }
+    .swatch { width: 10px; height: 10px; display: inline-block; border-radius: 2px; }
+    .code { background: var(--code); }
+    .comment { background: var(--comment); }
+    .blank { background: var(--blank); }
+    .composition-row { display: grid; grid-template-columns: 66px minmax(0, 1fr) 106px; gap: 14px; margin-top: 18px; align-items: center; font-size: 13px; }
+    .composition-name { font-weight: 600; }
+    .composition-track { height: 22px; background: #f0f4fa; overflow: hidden; border-radius: 3px; }
+    .stack { display: flex; height: 100%; }
+    .segment { height: 100%; }
+    .composition-total { text-align: right; }
+    .composition-values { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 6px 24px; margin-top: -8px; color: var(--muted); font-size: 12px; }
+    .composition-values span { display: inline-flex; align-items: center; gap: 6px; }
+    .table-scroll { overflow-x: auto; margin-top: 22px; }
+    table { width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 13px; }
+    th, td { padding: 13px 12px; text-align: right; border-bottom: 1px solid var(--line); }
+    thead th { color: var(--muted); background: #f4f7fa; font-size: 12px; font-weight: 500; }
+    th:first-child { text-align: left; }
+    tbody th { font-weight: 600; }
+    tbody tr:last-child > * { border-bottom: 0; }
+    footer { padding: 24px 0 8px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 680px) {
+      main { padding: 24px 16px 12px; }
+      h1 { font-size: 25px; }
+      .overview { gap: 8px; margin: 20px 0; }
+      .metric { padding: 14px 10px; }
+      .metric-value { font-size: 23px; overflow-wrap: anywhere; }
+      .panel { padding: 18px 14px; }
+      .panel-head { flex-direction: column; gap: 14px; }
+      .function-stats { grid-template-columns: repeat(3, 1fr); gap: 14px; }
+      .function-stat strong { font-size: 19px; }
+      .histogram-head, .histogram-row { grid-template-columns: 76px minmax(0, 1fr) 55px 52px; gap: 8px; }
+      .histogram-head, .histogram-row { font-size: 11px; }
+      .composition-row { grid-template-columns: 47px minmax(0, 1fr) 82px; gap: 10px; }
+      .composition-values { gap: 4px 12px; font-size: 11px; }
+      .legend { gap: 16px; }
+    }
+    @media print {
+      body { background: white; print-color-adjust: exact; }
+      main { max-width: none; padding: 0; }
+      .panel, .metric { break-inside: avoid; }
+      .table-scroll { overflow: visible; }
+      th, td { padding: 10px 6px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="brand">CODECOUNTER / REPORT</p>
+      <h1>代码统计报告</h1>
+      <p class="source">统计目录 <strong>$directory</strong></p>
+      <p class="status $status_class">$status</p>
+    </header>
+
+    <div class="overview">
+      <div class="metric"><p class="metric-label">源文件数</p><p class="metric-value">$files</p></div>
+      <div class="metric"><p class="metric-label">代码行数</p><p class="metric-value">$code</p></div>
+      <div class="metric"><p class="metric-label">函数个数</p><p class="metric-value">$functions</p></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>函数长度分布</h2><p class="description">每个函数取一个样本，仅计算代码行，跳过空行和纯注释行。</p></div>
+        <label class="control" for="language">统计范围 <select id="language"></select></label>
+      </div>
+      <div class="function-stats" id="function-stats"></div>
+      <p class="empty" id="function-empty" hidden>当前范围内没有识别到函数。</p>
+      <div class="histogram-head"><span>函数代码行数</span><span>函数数量分布</span><span>函数个数</span><span>占比</span></div>
+      <div id="histogram"></div>
+      <p class="chart-note">条形长度按当前范围内最多的组缩放；占比以当前范围内的函数总数为分母。</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>各语言行数构成</h2><p class="description" id="composition-description">所有语言共用行数刻度，便于比较代码规模。</p></div>
+        <label class="control" for="composition-mode">显示方式
+          <select id="composition-mode"><option value="count">行数</option><option value="percent">占比</option></select>
+        </label>
+      </div>
+      <div class="legend"><span><i class="swatch code"></i>代码行</span><span><i class="swatch comment"></i>注释行</span><span><i class="swatch blank"></i>空行</span></div>
+      <div id="composition"></div>
+      <p class="chart-note">每个物理行只归入一类；代码和注释混写的行计为代码行。</p>
+    </section>
+
+    <section class="panel">
+      <h2>统计明细</h2>
+      <p class="description">最大值、最小值、均值和中位数均来自各函数的代码行数；无函数时记为 0。</p>
+      <div class="table-scroll"><table><thead><tr>$table_head</tr></thead><tbody>$table_rows</tbody></table></div>
+    </section>
+    <noscript><p class="empty">请在浏览器中启用 JavaScript 以查看交互图表。上方统计明细可直接阅读。</p></noscript>
+    <footer>由 CodeCounter 生成。函数识别采用词法分析，复杂宏或不完整源码可能影响统计。</footer>
+  </main>
+  <script type="application/json" id="report-data">$data</script>
+  <script>
+    "use strict";
+    const report = JSON.parse(document.getElementById("report-data").textContent);
+    const integer = new Intl.NumberFormat("zh-CN");
+    const language = document.getElementById("language");
+    const mode = document.getElementById("composition-mode");
+    const percentage = (value, total) => total ? (value / total * 100).toFixed(1) + "%" : "0.0%";
+
+    function element(tag, className, text) {
+      const node = document.createElement(tag);
+      node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    report.groups.forEach((group, index) => {
+      const option = element("option", "", group.language);
+      option.value = String(index);
+      language.append(option);
+    });
+
+    function renderFunctions() {
+      const group = report.groups[Number(language.value)];
+      const stats = document.getElementById("function-stats");
+      stats.replaceChildren();
+      for (const [label, value] of [
+        ["函数个数", integer.format(group.functions)],
+        ["最大值 / 行", integer.format(group.maximum)],
+        ["最小值 / 行", integer.format(group.minimum)],
+        ["均值 / 行", group.average],
+        ["中位数 / 行", group.median],
+      ]) {
+        const item = element("div", "function-stat");
+        item.append(element("span", "", label), element("strong", "", value));
+        stats.append(item);
+      }
+      document.getElementById("function-empty").hidden = group.functions !== 0;
+      const chart = document.getElementById("histogram");
+      chart.replaceChildren();
+      const maximum = Math.max(1, ...group.bins);
+      report.bins.forEach((label, index) => {
+        const count = group.bins[index];
+        const row = element("div", "histogram-row");
+        const track = element("div", "histogram-track");
+        const bar = element("div", "histogram-bar");
+        bar.style.width = count / maximum * 100 + "%";
+        track.append(bar);
+        row.append(element("span", "", label), track,
+          element("span", "number", integer.format(count)),
+          element("span", "percent", percentage(count, group.functions)));
+        chart.append(row);
+      });
+    }
+
+    function renderComposition() {
+      const proportion = mode.value === "percent";
+      document.getElementById("composition-description").textContent = proportion
+        ? "各语言分别按总行数归一化，便于比较代码、注释和空行的比例。"
+        : "所有语言共用行数刻度，便于比较代码规模。";
+      const chart = document.getElementById("composition");
+      chart.replaceChildren();
+      const groups = report.groups.slice(1);
+      const maximum = Math.max(1, ...groups.map(group => group.code + group.comment + group.blank));
+      for (const group of groups) {
+        const total = group.code + group.comment + group.blank;
+        const row = element("div", "composition-row");
+        const track = element("div", "composition-track");
+        const stack = element("div", "stack");
+        stack.style.width = (proportion ? (total ? 100 : 0) : total / maximum * 100) + "%";
+        const values = element("div", "composition-values");
+        for (const [key, label] of [["code", "代码"], ["comment", "注释"], ["blank", "空行"]]) {
+          const value = group[key];
+          const segment = element("span", "segment " + key);
+          segment.style.width = (total ? value / total * 100 : 0) + "%";
+          stack.append(segment);
+          const detail = element("span", "");
+          detail.append(element("i", "swatch " + key),
+            document.createTextNode(label + " " + (proportion ? percentage(value, total) : integer.format(value))));
+          values.append(detail);
+        }
+        track.append(stack);
+        row.append(element("span", "composition-name", group.language), track,
+          element("span", "composition-total", integer.format(total) + " 行"), values);
+        chart.append(row);
+      }
+    }
+
+    language.addEventListener("change", renderFunctions);
+    mode.addEventListener("change", renderComposition);
+    renderFunctions();
+    renderComposition();
+  </script>
+</body>
+</html>

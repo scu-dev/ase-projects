@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from counter import (
-    Counts, EXTENSIONS, LANGUAGES, LanguageStats, ScanCancelled,
+    EXTENSIONS, LANGUAGES, LanguageStats, ScanCancelled,
     count_source, format_report, scan_directory,
 )
 
@@ -17,7 +17,7 @@ class SourceTests(unittest.TestCase):
     ) -> None:
         data = source.encode("utf-8") if isinstance(source, str) else source
         result = count_source(data, language)
-        self.assertEqual(result, Counts(code, blank, comment, functions))
+        self.assertEqual((result.code, result.blank, result.comment, result.functions), (code, blank, comment, functions))
 
     def test_empty_files_and_physical_line_endings(self):
         for source, code, blank in (
@@ -115,6 +115,13 @@ class SourceTests(unittest.TestCase):
         source = 's = f"{call("def fake(): pass")}"\n'
         self.check_counts("Python", source, code=1)
 
+    def test_python_function_ending_in_unclosed_string(self):
+        source = "def f():\n    value = '''first\n\nlast\n"
+        for suffix in ("", "\n"):
+            with self.subTest(suffix=suffix):
+                counts = count_source((source.rstrip("\n") + suffix).encode(), "Python")
+                self.assertEqual((counts.code, counts.blank, counts.function_lines), (3, 1, [3]))
+
     def test_csharp_strings_and_interpolation(self):
         source = (
             'string regular = "// not a comment";\n'
@@ -157,16 +164,57 @@ class SourceTests(unittest.TestCase):
         with self.assertRaises(UnicodeError):
             count_source(b"\xff\xfe\x00", "C")
 
-    def test_statistics_use_code_lines_of_each_file_including_zero(self):
+    def test_function_sizes_include_signature_and_body_code_lines(self):
+        cases = {
+            "C": (
+                "#define MAKE(x) \\\nint fake() {}\nint global;\nstatic int\nsum(\n int a,\n"
+                " // parameter\n int b)\n{\n /* block\n\n */\n puts(\"}\");\n return a + b; // mixed\n}\nint tail;",
+                [8],
+            ),
+            "C++": (
+                "class Widget {\npublic:\n Widget(int x)\n : value{x}, other(0)\n {\n }\n int value, other;\n};",
+                [4],
+            ),
+            "JAVA": (
+                "class A {\n @Override\n public String\n toString()\n {\n  // ignored\n"
+                "  return \"}\";\n }\n abstract void skipped();\n}",
+                [6],
+            ),
+            "C#": (
+                "class C {\n int Outside { get; set; }\n int Outer()\n {\n  int Local(\n   int x) =>\n"
+                "     x+1;\n  return Local(1);\n }\n Func<int> Another() =>\n  () => {\n"
+                "   var x = 1;\n   return x;\n  };\n}",
+                [3, 5, 7],
+            ),
+            "Python": (
+                "@decorate\nasync def outer(\n    value,\n):\n    \"\"\"doc\n\nno indent\n\"\"\"\n"
+                "    # ignored\n    def inner():\n        return (\n            1\n)\n    return inner()\n"
+                "global_value = 9\ndef stub() -> None: ...",
+                [1, 4, 11],
+            ),
+        }
+        for language, (source, expected) in cases.items():
+            with self.subTest(language=language):
+                result = count_source(source.replace("\n", "\r\n").encode(), language)
+                self.assertEqual(sorted(result.function_lines), expected)
+                self.assertEqual(result.functions, len(expected))
+
+    def test_statistics_pool_all_functions_across_files(self):
         stats = LanguageStats("C")
-        for code in (0, 2, 4, 9):
-            stats.add(Counts(code=code, functions=1))
+        for source in (
+            b"int global;\nint a() {} int b() {}",
+            b"int c() {\n// ignored\n return 0;\n}\nint d() {\n step();\n return 0;\n}",
+            b"int only_data;",
+            b"",
+        ):
+            stats.add(count_source(source, "C"))
         self.assertEqual(stats.files, 4)
-        self.assertEqual((stats.code, stats.functions), (15, 4))
-        self.assertEqual((stats.maximum, stats.minimum, stats.average, stats.median), (9, 0, 3.75, 3))
-        stats.add(Counts(code=5))
-        self.assertEqual(stats.median, 4)
+        self.assertEqual((stats.code, stats.functions), (10, 4))
+        self.assertEqual((stats.maximum, stats.minimum, stats.average, stats.median), (4, 1, 2.25, 2))
+        stats.add(count_source(b"int e() {\n return 1;\n}", "C"))
+        self.assertEqual(stats.median, 3)
         empty = LanguageStats("C")
+        empty.add(count_source(b"int global;\nvoid declaration();", "C"))
         self.assertEqual((empty.maximum, empty.minimum, empty.average, empty.median), (0, 0, 0, 0))
 
     def test_cancellation_before_counting(self):
@@ -190,7 +238,7 @@ class DirectoryTests(unittest.TestCase):
         path.write_bytes(data.encode("utf-8") if isinstance(data, str) else data)
         return path
 
-    def test_nested_directories_languages_and_file_statistics(self):
+    def test_nested_directories_languages_and_function_statistics(self):
         self.write("中文 空格/one.C", "int f() {}\n")
         self.write("中文 空格/empty.h", "")
         self.write("two.HPP", "// header\n")
@@ -203,7 +251,8 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(tuple(result.languages), LANGUAGES)
         self.assertEqual(result.files, 6)
         c = result.languages["C"]
-        self.assertEqual((c.files, c.code, c.minimum, c.maximum, c.average, c.median), (2, 1, 0, 1, 0.5, 0.5))
+        self.assertEqual((c.files, c.code, c.minimum, c.maximum, c.average, c.median), (2, 1, 1, 1, 1, 1))
+        self.assertEqual(format_report(result).splitlines()[1].split()[-4:], ["1", "1", "1.00", "1.00"])
         for language in ("JAVA", "Python", "C#"):
             self.assertEqual(result.languages[language].functions, 1)
 

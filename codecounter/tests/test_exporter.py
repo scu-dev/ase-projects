@@ -7,7 +7,7 @@ from unittest.mock import patch
 from xml.etree.ElementTree import Element, fromstring
 from zipfile import ZipFile
 
-from counter import Counts, ScanResult
+from counter import ScanResult, count_source
 from exporter import export_csv, export_xlsx
 
 
@@ -23,9 +23,9 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(self.root.parent, parent)
         self.addCleanup(temporary.cleanup)
         self.result = ScanResult()
-        for count in (0, 2, 3):
-            self.result.languages["C"].add(Counts(code=count, blank=1, comment=2, functions=1))
-        self.result.languages["C#"].add(Counts(code=10, blank=3, comment=2, functions=1))
+        for source in (b"int a() {}\nint b() {}\nint global;", b"int c() {\n return 0;\n}\n\n// comment", b"int data;"):
+            self.result.languages["C"].add(count_source(source, "C"))
+        self.result.languages["C#"].add(count_source(b"class C {\n int F() => 10;\n}", "C#"))
 
     def test_csv_preserves_headers_order_and_display_precision(self) -> None:
         path = self.root / "中文 统计.csv"
@@ -35,8 +35,8 @@ class ExportTests(unittest.TestCase):
         rows = list(csv.reader(StringIO(data.decode("utf-8-sig"))))
         self.assertEqual(tuple(rows[0]), HEADINGS)
         self.assertEqual([row[0] for row in rows[1:]], ["C", "C++", "JAVA", "Python", "C#"])
-        self.assertEqual(rows[1], ["C", "3", "5", "3", "6", "3", "3", "0", "1.67", "2.00"])
-        self.assertEqual(rows[5], ["C#", "1", "10", "3", "2", "1", "10", "10", "10.00", "10.00"])
+        self.assertEqual(rows[1], ["C", "3", "7", "1", "1", "3", "3", "1", "1.67", "1.00"])
+        self.assertEqual(rows[5], ["C#", "1", "3", "0", "0", "1", "1", "1", "1.00", "1.00"])
         self.assertTrue(all(len(row) == 10 for row in rows))
 
     def test_xlsx_has_numeric_cells_and_preserves_unrounded_mean(self) -> None:
@@ -59,11 +59,11 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(tuple(titles), HEADINGS)
         self.assertEqual(cell("A6").findtext("s:is/s:t", namespaces=NAMESPACES), "C#")
         self.assertEqual(cell("B2").findtext("s:v", namespaces=NAMESPACES), "3")
-        self.assertEqual(cell("C2").findtext("s:v", namespaces=NAMESPACES), "5")
+        self.assertEqual(cell("C2").findtext("s:v", namespaces=NAMESPACES), "7")
         self.assertEqual(cell("G2").findtext("s:v", namespaces=NAMESPACES), "3")
-        self.assertEqual(cell("H2").findtext("s:v", namespaces=NAMESPACES), "0")
+        self.assertEqual(cell("H2").findtext("s:v", namespaces=NAMESPACES), "1")
         self.assertAlmostEqual(float(cell("I2").findtext("s:v", default="nan", namespaces=NAMESPACES)), 5 / 3)
-        self.assertEqual(float(cell("J2").findtext("s:v", default="nan", namespaces=NAMESPACES)), 2)
+        self.assertEqual(float(cell("J2").findtext("s:v", default="nan", namespaces=NAMESPACES)), 1)
         for row in rows[1:]:
             self.assertEqual(len(row), 10)
             self.assertTrue(all(item.get("t") == "n" for item in list(row)[1:]))

@@ -1,4 +1,5 @@
 import argparse
+from importlib import import_module
 from pathlib import Path
 from queue import Empty, SimpleQueue
 import sys
@@ -8,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Literal, Protocol, cast
 
 from counter import COLUMNS, ScanResult, format_report, scan_directory
-from exporter import export_csv, export_xlsx
+from exporter import export_csv, export_html, export_xlsx
 
 
 type ScanEvent = (
@@ -24,6 +25,16 @@ class ScrollView(Protocol):
     def yview(self, *args: str) -> tuple[float, float] | None: ...
 
 
+class TkDndLoader(Protocol):
+    # tkinterdnd2 does not publish type annotations for its loader.
+    def require(self, tkroot: tk.Tk) -> str: ...
+
+
+class TclLists(Protocol):
+    # Tkinter's splitlist stub leaves its argument untyped.
+    def splitlist(self, value: object, /) -> tuple[str, ...]: ...
+
+
 class CodeCounterApp(tk.Tk):
     def __init__(self, directory: str | Path | None = None) -> None:
         super().__init__()
@@ -34,12 +45,13 @@ class CodeCounterApp(tk.Tk):
         self.rowconfigure(0, weight=1)
 
         self.directory = tk.StringVar(self, value=str(directory if directory is not None else Path.cwd()))
-        self.status = tk.StringVar(self, value="选择目录后开始统计。")
+        self.status = tk.StringVar(self, value="选择或拖入一个文件夹开始统计。")
         self._busy = False
         self._closed = False
         self._cancel = Event()
         self._events: SimpleQueue[ScanEvent] = SimpleQueue()
         self._poll_id: str | None = None
+        self._drop_error_id: str | None = None
         self._result: ScanResult | None = None
 
         style = ttk.Style(self)
@@ -47,6 +59,7 @@ class CodeCounterApp(tk.Tk):
             style.theme_use("vista")
 
         self._build_ui()
+        self._enable_drop()
         self.directory.trace_add("write", self._directory_changed)
         self.protocol("WM_DELETE_WINDOW", self._close)
 
@@ -72,6 +85,10 @@ class CodeCounterApp(tk.Tk):
             header, text="导出 XLSX…", command=lambda: self._export_results("xlsx"), state="disabled"
         )
         self.export_xlsx_button.grid(row=0, column=2, padx=(8, 0))
+        self.export_html_button = ttk.Button(
+            header, text="导出 HTML 可视化...", command=lambda: self._export_results("html"), state="disabled"
+        )
+        self.export_html_button.grid(row=0, column=3, padx=(8, 0))
 
         ttk.Label(content, text="统计目录").grid(
             row=1, column=0, sticky="w", pady=(0, 6)
@@ -88,20 +105,14 @@ class CodeCounterApp(tk.Tk):
         self.directory_entry.bind("<Return>", lambda event: self._start_scan())
 
         self.browse_button = ttk.Button(
-            directory_bar, text="浏览…", command=self._choose_directory
+            directory_bar, text="选择文件夹", command=self._choose_directory
         )
         self.browse_button.grid(row=0, column=1, padx=(8, 0))
-
-        self.scan_button = ttk.Button(
-            directory_bar, text="开始统计", command=self._start_scan
-        )
-        self.scan_button.grid(row=0, column=2, padx=(8, 0))
-        self.scan_button.bind("<Return>", lambda event: self._start_scan())
 
         self.cancel_button = ttk.Button(
             directory_bar, text="取消", command=self._cancel_scan, state="disabled"
         )
-        self.cancel_button.grid(row=0, column=3, padx=(8, 0))
+        self.cancel_button.grid(row=0, column=2, padx=(8, 0))
 
         results = ttk.Frame(content)
         results.grid(row=3, column=0, sticky="nsew")
@@ -142,12 +153,58 @@ class CodeCounterApp(tk.Tk):
     def _directory_changed(self, *_args: str) -> None:
         if not self._busy:
             self._clear_results()
-            self.status.set("选择目录后开始统计。")
+            self.status.set("选择或拖入一个文件夹开始统计。")
+
+    def _enable_drop(self) -> None:
+        cast(TkDndLoader, import_module("tkinterdnd2.TkinterDnD")).require(self)
+        # Prefer the file list when the source also offers its paths as text.
+        self.tk.call("tkdnd::drop_target", "register", str(self), ("DND_Files", "*"))
+        # Return copy even for invalid input so dropping it reaches validation.
+        # No source files are moved or copied by this application.
+        action = self.register(lambda: "copy")
+        for event in ("<<DropEnter>>", "<<DropPosition>>"):
+            self.tk.call("bind", str(self), event, action)
+        command = self.register(self._drop_directory)
+        self.tk.call("bind", str(self), "<<Drop>>", f"{command} %T %D")
+
+    def _reject_drop(self, message: str) -> str:
+        # Let the native drag operation finish before opening a modal dialog.
+        if self._drop_error_id is not None:
+            self.after_cancel(self._drop_error_id)
+
+        def show_error() -> None:
+            self._drop_error_id = None
+            if not self._closed:
+                messagebox.showerror("无法接收拖入", message, parent=self)
+
+        self._drop_error_id = self.after(0, show_error)
+        return "refuse_drop"
+
+    def _drop_directory(self, data_type: str, data: str) -> str:
+        if self._closed:
+            return "refuse_drop"
+        try:
+            splitlist = cast(TclLists, self.tk).splitlist
+            types = splitlist(self.tk.call("tkdnd::platform_independent_types", (data_type,)))
+            if "DND_Files" not in types:
+                return self._reject_drop("请只拖入一个文件夹。")
+            paths = splitlist(data)
+            if len(paths) != 1 or not paths[0]:
+                return self._reject_drop("请只拖入一个文件夹。")
+            directory = Path(paths[0])
+            if not directory.is_dir():
+                return self._reject_drop("请只拖入一个文件夹；文件或无效路径无法用于统计。")
+        except (OSError, ValueError, RuntimeError, tk.TclError) as error:
+            return self._reject_drop(f"无法读取拖入的文件夹：{error}")
+        if self._busy:
+            return self._reject_drop("正在统计，请先取消或等待当前统计完成。")
+        return "copy" if self._start_scan(directory) else "refuse_drop"
 
     def _clear_results(self) -> None:
         self._result = None
         self.export_csv_button.state(["disabled"])
         self.export_xlsx_button.state(["disabled"])
+        self.export_html_button.state(["disabled"])
         for item in self.results.get_children():
             self.results.delete(item)
 
@@ -165,20 +222,20 @@ class CodeCounterApp(tk.Tk):
             mustexist=True,
         )
         if selected:
-            self.directory.set(str(Path(selected)))
+            self._start_scan(Path(selected))
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
-        for widget in (self.directory_entry, self.browse_button, self.scan_button):
+        for widget in (self.directory_entry, self.browse_button):
             widget.state(["disabled"] if busy else ["!disabled"])
         self.cancel_button.state(["!disabled"] if busy else ["disabled"])
-        for button in (self.export_csv_button, self.export_xlsx_button):
+        for button in (self.export_csv_button, self.export_xlsx_button, self.export_html_button):
             button.state(["disabled"] if busy or self._result is None else ["!disabled"])
 
-    def _start_scan(self) -> None:
+    def _start_scan(self, selected: Path | None = None) -> bool:
         if self._busy or self._closed:
-            return
-        value = self.directory.get().strip()
+            return False
+        value = str(selected) if selected is not None else self.directory.get().strip()
         try:
             if not value:
                 raise ValueError("请输入要统计的目录。")
@@ -187,7 +244,7 @@ class CodeCounterApp(tk.Tk):
                 raise ValueError("目录不存在、无法访问，或所选路径不是文件夹。")
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror("无法开始统计", str(error), parent=self)
-            return
+            return False
         self.directory.set(str(directory))
         self._clear_results()
         self._cancel = Event()
@@ -195,6 +252,7 @@ class CodeCounterApp(tk.Tk):
         self.status.set("正在扫描目录…")
         Thread(target=self._scan_worker, args=(directory,), daemon=True).start()
         self._poll_id = self.after(75, self._poll_events)
+        return True
 
     def _scan_worker(self, directory: Path) -> None:
         try:
@@ -250,14 +308,14 @@ class CodeCounterApp(tk.Tk):
                 parent=self,
             )
 
-    def _export_results(self, file_format: Literal["csv", "xlsx"]) -> None:
+    def _export_results(self, file_format: Literal["csv", "xlsx", "html"]) -> None:
         result = self._result
         if self._busy or result is None:
             return
         try:
             selected = filedialog.asksaveasfilename(
                 parent=self,
-                title=f"导出 {file_format.upper()}",
+                title="导出 HTML 可视化" if file_format == "html" else f"导出 {file_format.upper()}",
                 initialfile=f"codecounter.{file_format}",
                 defaultextension=f".{file_format}",
                 filetypes=((f"{file_format.upper()} 文件", f"*.{file_format}"),),
@@ -268,8 +326,10 @@ class CodeCounterApp(tk.Tk):
             path = Path(selected)
             if file_format == "csv":
                 export_csv(result, path)
-            else:
+            elif file_format == "xlsx":
                 export_xlsx(result, path)
+            else:
+                export_html(result, path, Path(self.directory.get()))
         except (OSError, ValueError, RuntimeError, tk.TclError) as error:
             messagebox.showerror("导出失败", str(error), parent=self)
             return
@@ -286,6 +346,8 @@ class CodeCounterApp(tk.Tk):
         self._cancel.set()
         if self._poll_id is not None:
             self.after_cancel(self._poll_id)
+        if self._drop_error_id is not None:
+            self.after_cancel(self._drop_error_id)
         self.destroy()
 
 
