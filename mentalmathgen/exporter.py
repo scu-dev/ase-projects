@@ -14,15 +14,18 @@ def validate_spacing(spacing: int) -> None:
         raise ValueError("题间空行数必须是 0～100 的整数。")
 
 
-def format_text(worksheet: Worksheet, *, answers: bool = False, spacing: int = 0) -> str:
+def format_text(
+    worksheet: Worksheet, *, answers: bool = False, spacing: int = 0, tabbed_numbers: bool = False,
+) -> str:
     validate_spacing(spacing)
-    if answers:
-        return "\n".join(f"{index}. {question.answer}" for index, question in enumerate(worksheet.questions, 1))
-    separator = "\n" * (spacing + 1)
-    return separator.join(
-        f"{index}. {question.expression} = ________"
-        for index, question in enumerate(worksheet.questions, 1)
-    )
+    number_width = len(str(len(worksheet.questions)))
+    separator = "\n" if answers else "\n" * (spacing + 1)
+    rows: list[str] = []
+    for index, question in enumerate(worksheet.questions, 1):
+        prefix = f"\t{index}.\t" if tabbed_numbers else f"{index:>{number_width}}. "
+        body = question.answer if answers else f"{question.expression} = ________"
+        rows.append(prefix + body)
+    return separator.join(rows)
 
 
 @contextmanager
@@ -94,10 +97,13 @@ def export_pdf(
     title = "参考答案" if answers else "口算练习"
     width, height = A4
     margin, bottom, leading = 48, 52, 20
+    body_size = 12
     with _destination(Path(path), cancel) as temporary:
         canvas = Canvas(str(temporary), pagesize=A4)
         canvas.setTitle(title)
         canvas.setAuthor("MentalMathGen")
+        body_x = margin + canvas.stringWidth(f"{len(worksheet.questions)}. ", font, body_size)
+        body_width = width - margin - body_x
         page = 0
 
         def new_page() -> float:
@@ -121,7 +127,7 @@ def export_pdf(
             canvas.setFont(font, 9)
             canvas.drawRightString(width - margin, 28, f"第 {page} 页")
             canvas.setFillColorRGB(0.08, 0.10, 0.14)
-            canvas.setFont(font, 12)
+            canvas.setFont(font, body_size)
             return height - 120
 
         y = new_page()
@@ -129,10 +135,10 @@ def export_pdf(
             check_cancelled(cancel)
             tokens = [question.answer] if answers else [*question.expression.split(), "= ________"]
             lines: list[str] = []
-            line = f"{index}."
-            for token in tokens:
+            line = tokens[0]
+            for token in tokens[1:]:
                 candidate = f"{line} {token}"
-                if canvas.stringWidth(candidate, font, 12) > width - 2 * margin:
+                if canvas.stringWidth(candidate, font, body_size) > body_width:
                     lines.append(line)
                     line = token
                 else:
@@ -140,11 +146,14 @@ def export_pdf(
             lines.append(line)
             if y - (len(lines) - 1) * leading < bottom:
                 y = new_page()
-            for line in lines:
-                canvas.drawString(margin, y, line)
+            prefix = f"{index}. "
+            number_x = body_x - canvas.stringWidth(prefix, font, body_size)
+            canvas.drawString(number_x, y, prefix + lines[0])
+            for continuation in lines[1:]:
                 y -= leading
+                canvas.drawString(body_x, y, continuation)
             # At a page boundary, excess blank lines are discarded instead of making empty pages.
-            y -= 6 + (0 if answers else spacing * leading)
+            y -= leading + 6 + (0 if answers else spacing * leading)
             if progress and (index % 100 == 0 or index == len(worksheet.questions)):
                 progress(index, len(worksheet.questions))
         canvas.save()

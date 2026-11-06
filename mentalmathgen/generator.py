@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
-from random import Random, SystemRandom
+from random import Random
 from threading import Event
 from time import monotonic
 
@@ -24,15 +24,14 @@ class Config:
     negative: bool = False
     remainder: bool = False
     fractions: bool = False
-    seed: int | None = None
 
     def __post_init__(self) -> None:
         for name, value, low, high in (
             ("题目数量", self.count, 1, 10_000),
             ("每题最小数字个数", self.min_numbers, 2, 16),
             ("每题最大数字个数", self.max_numbers, 2, 16),
-            ("最小数值", self.minimum, 0, 1_000_000),
-            ("最大数值", self.maximum, 0, 1_000_000),
+            ("最小数值", self.minimum, 0, 100),
+            ("最大数值", self.maximum, 0, 100),
         ):
             if type(value) is not int or not low <= value <= high:
                 raise ValueError(f"{name}必须是 {low}～{high} 的整数。")
@@ -40,10 +39,6 @@ class Config:
             raise ValueError("每题最大数字个数不能低于每题最小数字个数。")
         if self.minimum > self.maximum:
             raise ValueError("最小数值不能大于最大数值。")
-        if self.seed is not None and (
-            type(self.seed) is not int or not 1 <= self.seed <= 2_147_483_647
-        ):
-            raise ValueError("随机种子必须是 1～2147483647 的整数，或留空。")
 
 
 @dataclass(frozen=True)
@@ -63,7 +58,6 @@ class Question:
 class Worksheet:
     config: Config
     questions: tuple[Question, ...]
-    seed: int
 
 
 class CancelledError(Exception):
@@ -171,8 +165,7 @@ def _binary(left: int, right: int, op: str, config: Config) -> Question:
 
 def generate(config: Config, cancel: Event | None = None, progress: Progress | None = None) -> Worksheet:
     check_cancelled(cancel)
-    seed = config.seed if config.seed is not None else SystemRandom().randint(1, 2_147_483_647)
-    rng = Random(seed)
+    rng = Random()
     operators = OPERATORS if config.mul_div else OPERATORS[:2]
     questions: list[Question]
     if progress:
@@ -236,4 +229,4 @@ def generate(config: Config, cancel: Event | None = None, progress: Progress | N
     check_cancelled(cancel)
     if progress:
         progress(config.count, config.count)
-    return Worksheet(config, tuple(questions), seed)
+    return Worksheet(config, tuple(questions))

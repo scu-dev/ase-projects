@@ -5,10 +5,12 @@ from queue import Empty, SimpleQueue
 from threading import Event, Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter.font import Font
 from typing import Literal
 
 from exporter import export_pdf, export_txt, format_text, validate_spacing
 from generator import CancelledError, Config, Worksheet, generate
+from range_selector import RangeSelector
 
 
 type WorkerEvent = (
@@ -30,8 +32,8 @@ class MentalMathApp(tk.Tk):
         self.fields = {
             name: tk.StringVar(self, value=value)
             for name, value in (
-                ("count", "20"), ("min_numbers", "2"), ("max_numbers", "2"), ("minimum", "0"),
-                ("maximum", "20"), ("seed", ""),
+                ("count", "20"), ("min_numbers", "2"), ("max_numbers", "2"),
+                ("minimum", "0"), ("maximum", "20"),
             )
         }
         self.options = {
@@ -49,6 +51,7 @@ class MentalMathApp(tk.Tk):
         self._poll_id: str | None = None
         self._controls: list[ttk.Widget] = []
         self.entries: dict[str, ttk.Entry] = {}
+        self.ranges: dict[str, RangeSelector] = {}
         self.checks: dict[str, ttk.Checkbutton] = {}
         self._export_buttons: list[ttk.Button] = []
         self._save_directory = Path.cwd()
@@ -75,36 +78,35 @@ class MentalMathApp(tk.Tk):
         settings = ttk.LabelFrame(sidebar, text="生成设置", padding=12)
         settings.grid(row=0, column=0, sticky="ew")
         settings.columnconfigure(1, weight=1)
-        for row, (name, label, low, high) in enumerate((
-            ("count", "题目数量", 1, 10_000),
-            ("min_numbers", "每题最小数字个数", 2, 16),
-            ("max_numbers", "每题最大数字个数", 2, 16),
-            ("minimum", "最小数值", 0, 1_000_000),
-            ("maximum", "最大数值", 0, 1_000_000),
-        )):
-            ttk.Label(settings, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=5)
-            entry = ttk.Spinbox(settings, textvariable=self.fields[name], from_=low, to=high, width=12)
-            entry.grid(row=row, column=1, sticky="ew", pady=5)
-            self.entries[name] = entry
-            self._controls.append(entry)
-        ttk.Separator(settings).grid(row=5, column=0, columnspan=2, sticky="ew", pady=10)
+        ttk.Label(settings, text="题目数量").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=5)
+        count = ttk.Spinbox(settings, textvariable=self.fields["count"], from_=1, to=10_000, width=12)
+        count.grid(row=0, column=1, sticky="ew", pady=5)
+        self.entries["count"] = count
+        self._controls.append(count)
+        for row, (name, title, lower, upper, minimum, maximum) in enumerate((
+            ("numbers", "每题数字个数", "min_numbers", "max_numbers", 2, 16),
+            ("values", "数值范围", "minimum", "maximum", 0, 100),
+        ), 1):
+            selector = RangeSelector(
+                settings, title=title, lower=self.fields[lower], upper=self.fields[upper],
+                minimum=minimum, maximum=maximum, on_expand=self._expand_range,
+            )
+            selector.grid(row=row, column=0, columnspan=2, sticky="ew", pady=5)
+            self.ranges[name] = selector
+            self.entries[lower] = selector.lower_entry
+            self.entries[upper] = selector.upper_entry
+        ttk.Separator(settings).grid(row=3, column=0, columnspan=2, sticky="ew", pady=10)
         for row, (name, label) in enumerate((
             ("mul_div", "允许乘除法"),
             ("brackets", "使用括号（超过两个数字时）"),
             ("negative", "允许中间结果及答案为负数"),
             ("remainder", "除法允许余数（两个数字时）"),
             ("fractions", "除法允许分数（超过两个数字时）"),
-        ), 6):
+        ), 4):
             check = ttk.Checkbutton(settings, text=label, variable=self.options[name])
             check.grid(row=row, column=0, columnspan=2, sticky="w", pady=5)
             self.checks[name] = check
             self._controls.append(check)
-        ttk.Separator(settings).grid(row=11, column=0, columnspan=2, sticky="ew", pady=10)
-        ttk.Label(settings, text="种子（留空随机）").grid(row=12, column=0, sticky="w", padx=(0, 12))
-        seed = ttk.Entry(settings, textvariable=self.fields["seed"], width=12)
-        seed.grid(row=12, column=1, sticky="ew")
-        self.entries["seed"] = seed
-        self._controls.append(seed)
 
         actions = ttk.Frame(sidebar)
         actions.grid(row=1, column=0, sticky="ew", pady=(12, 0))
@@ -124,13 +126,14 @@ class MentalMathApp(tk.Tk):
         preview.rowconfigure(0, weight=1)
         self.tabs = ttk.Notebook(preview)
         self.tabs.grid(row=0, column=0, sticky="nsew")
+        self._preview_font = Font(root=self, family="Microsoft YaHei UI", size=12)
         self.previews: list[tk.Text] = []
         for title in ("题目", "答案"):
             frame = ttk.Frame(self.tabs)
             frame.columnconfigure(0, weight=1)
             frame.rowconfigure(0, weight=1)
             text = tk.Text(
-                frame, wrap="word", state="disabled", font=("Microsoft YaHei UI", 12),
+                frame, wrap="word", state="disabled", font=self._preview_font,
                 padx=14, pady=12, relief="flat", width=40, height=15,
                 background="white", foreground="#18202a", insertbackground="#18202a",
             )
@@ -168,24 +171,29 @@ class MentalMathApp(tk.Tk):
         else:
             preview.yview_scroll(int(value), units)
 
+    def _expand_range(self, selected: RangeSelector) -> None:
+        for selector in self.ranges.values():
+            if selector is not selected:
+                selector.set_expanded(False)
+
     def _read_config(self) -> Config:
         labels = {
             "count": "题目数量", "min_numbers": "每题最小数字个数", "max_numbers": "每题最大数字个数",
-            "minimum": "最小数值", "maximum": "最大数值", "seed": "随机种子",
+            "minimum": "最小数值", "maximum": "最大数值",
         }
         values: dict[str, int] = {}
         for name, variable in self.fields.items():
-            text = variable.get().strip()
-            if name == "seed" and not text:
-                continue
             try:
-                values[name] = int(text)
+                values[name] = int(variable.get().strip())
             except ValueError:
+                for selector in self.ranges.values():
+                    if self.entries[name] in (selector.lower_entry, selector.upper_entry):
+                        selector.set_expanded(True)
                 self.entries[name].focus_set()
                 raise ValueError(f"{labels[name]}必须填写整数。") from None
         return Config(
             count=values["count"], min_numbers=values["min_numbers"], max_numbers=values["max_numbers"],
-            minimum=values["minimum"], maximum=values["maximum"], seed=values.get("seed"),
+            minimum=values["minimum"], maximum=values["maximum"],
             mul_div=self.options["mul_div"].get(), brackets=self.options["brackets"].get(),
             negative=self.options["negative"].get(), remainder=self.options["remainder"].get(),
             fractions=self.options["fractions"].get(),
@@ -219,6 +227,8 @@ class MentalMathApp(tk.Tk):
         self._busy = busy
         for control in (*self._controls, self.generate_button):
             control.state(["disabled"] if busy else ["!disabled"])
+        for selector in self.ranges.values():
+            selector.set_enabled(not busy)
         self.cancel_button.state(["!disabled"] if busy else ["disabled"])
         for button in self._export_buttons:
             button.state(["!disabled"] if self.worksheet is not None and not busy else ["disabled"])
@@ -241,6 +251,10 @@ class MentalMathApp(tk.Tk):
             config = self._read_config()
             self._read_spacing()
         except ValueError as error:
+            for selector in self.ranges.values():
+                if not selector.valid:
+                    selector.set_expanded(True)
+                    break
             messagebox.showerror("参数有误", str(error), parent=self)
             return
         self._cancel = Event()
@@ -322,10 +336,16 @@ class MentalMathApp(tk.Tk):
         if self.worksheet is None:
             return
         spacing = self._read_spacing()
+        digits = len(str(len(self.worksheet.questions)))
+        digit_width = max(self._preview_font.measure(digit) for digit in "0123456789")
+        number_right = self._preview_font.measure(" .") + digits * digit_width
+        body_left = number_right + self._preview_font.measure(" ")
         for answers, preview in enumerate(self.previews):
             preview.configure(state="normal")
             preview.delete("1.0", "end")
-            preview.insert("1.0", format_text(self.worksheet, answers=bool(answers), spacing=spacing))
+            preview.tag_configure("rows", tabs=(number_right, "right", body_left, "left"), lmargin2=body_left)
+            text = format_text(self.worksheet, answers=bool(answers), spacing=spacing, tabbed_numbers=True)
+            preview.insert("1.0", text, "rows")
             preview.configure(state="disabled")
 
     def _cancel_job(self) -> None:

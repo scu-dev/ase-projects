@@ -1,4 +1,5 @@
 from pathlib import Path
+from random import Random
 import re
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -45,7 +46,6 @@ class GuiTests(unittest.TestCase):
         self.app.withdraw()
         self.app.update_idletasks()
         self.addCleanup(self.app.close)
-        self.app.fields["seed"].set("42")
         parent = Path(__file__).resolve().parent
         self.temp = TemporaryDirectory(prefix="mentalmathgen-gui-", dir=parent)
         self.addCleanup(self.temp.cleanup)
@@ -60,6 +60,7 @@ class GuiTests(unittest.TestCase):
         self.assertFalse(self.app.busy, "Background operation did not finish")
 
     def test_generate_preview_spacing_and_replacement(self):
+        self.assertNotIn("seed", self.app.fields)
         self.app.start_generation()
         self.assertTrue(self.app.generate_button.instate(["disabled"]))
         self.assertTrue(self.app.entries["count"].instate(["disabled"]))
@@ -68,7 +69,7 @@ class GuiTests(unittest.TestCase):
         assert sheet is not None
         self.assertEqual(len(sheet.questions), 20)
         for answers, preview in enumerate(self.app.previews):
-            self.assertEqual(preview.get("1.0", "end-1c"), format_text(sheet, answers=bool(answers)))
+            self.assertEqual(preview.get("1.0", "end-1c"), format_text(sheet, answers=bool(answers), tabbed_numbers=True))
         self.app.spacing.set("2")
         self.assertIs(self.app.worksheet, sheet)
         self.assertIn("\n\n\n", self.app.previews[0].get("1.0", "end"))
@@ -98,7 +99,80 @@ class GuiTests(unittest.TestCase):
         self.app.set_busy(False)
         self.assertTrue(all(check.instate(["!disabled"]) for check in self.app.checks.values()))
 
+    def test_only_one_range_editor_is_expanded(self):
+        self.app.tk.call("wm", "attributes", self.app, "-alpha", 0.0)
+        self.app.deiconify()
+        self.app.update()
+        preview_x = self.app.tabs.winfo_rootx()
+        numbers, values = self.app.ranges["numbers"], self.app.ranges["values"]
+        self.assertFalse(numbers.expanded)
+        self.assertFalse(values.expanded)
+        numbers.toggle_button.invoke()
+        self.app.update()
+        self.assertTrue(numbers.expanded)
+        self.assertEqual(self.app.tabs.winfo_rootx(), preview_x)
+        values.toggle_button.invoke()
+        self.app.update()
+        self.assertFalse(numbers.expanded)
+        self.assertTrue(values.expanded)
+        self.assertEqual(self.app.tabs.winfo_rootx(), preview_x)
+        self.app.set_busy(True)
+        numbers.toggle_button.invoke()
+        self.assertFalse(numbers.expanded)
+        self.assertTrue(numbers.lower_entry.instate(["disabled"]))
+        self.assertTrue(values.upper_entry.instate(["disabled"]))
+        self.app.set_busy(False)
+        numbers.toggle_button.invoke()
+        self.assertTrue(numbers.expanded)
+        self.assertFalse(values.expanded)
+
+    def test_value_range_is_limited_to_100(self):
+        values = self.app.ranges["values"]
+        self.assertEqual(values.maximum, 100)
+        for minimum, maximum in (("0", "101"), ("101", "101"), ("-1", "20"), ("21", "20")):
+            with self.subTest(minimum=minimum, maximum=maximum):
+                values.set_expanded(False)
+                self.app.fields["minimum"].set(minimum)
+                self.app.fields["maximum"].set(maximum)
+                with patch("main.messagebox.showerror") as error:
+                    self.app.start_generation()
+                error.assert_called_once()
+                self.assertTrue(values.expanded)
+                self.assertFalse(self.app.busy)
+                self.assertIsNone(self.app.worksheet)
+        self.app.fields["minimum"].set("0")
+        self.app.fields["maximum"].set("100")
+        self.app.start_generation()
+        self.finish()
+        sheet = self.app.worksheet
+        assert sheet is not None
+        self.assertEqual((sheet.config.minimum, sheet.config.maximum), (0, 100))
+
+    def test_number_and_body_columns_align_in_both_previews(self):
+        self.app.fields["count"].set("100")
+        self.app.start_generation()
+        self.finish()
+        # Tk only reports glyph positions after the preview has been mapped.
+        self.app.tk.call("wm", "attributes", self.app, "-alpha", 0.0)
+        self.app.deiconify()
+        for tab, preview in enumerate(self.app.previews):
+            self.app.tk.call(self.app.tabs, "select", tab)
+            self.app.update()
+            columns: set[tuple[int, int]] = set()
+            for number in (1, 9, 10, 99, 100):
+                start = f"{number}.0"
+                preview.see(start)
+                self.app.update_idletasks()
+                line = preview.get(start, f"{number}.end")
+                dot = line.index(".")
+                dot_box = preview.bbox(f"{number}.{dot}")
+                body_box = preview.bbox(f"{number}.{dot + 2}")
+                assert dot_box is not None and body_box is not None
+                columns.add((dot_box[0], body_box[0]))
+            self.assertEqual(len(columns), 1)
+
     def test_random_operand_range_reaches_generated_questions(self):
+        self.enterContext(patch("generator.Random", return_value=Random(42)))
         self.app.fields["count"].set("40")
         self.app.fields["min_numbers"].set("2")
         self.app.fields["max_numbers"].set("5")

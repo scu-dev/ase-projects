@@ -2,8 +2,10 @@ import ast
 from dataclasses import replace
 from fractions import Fraction
 from itertools import product
+from random import Random
 from threading import Event
 import unittest
+from unittest.mock import call, patch
 
 from generator import CancelledError, Config, GenerationError, LIMIT, Question, generate
 
@@ -70,7 +72,7 @@ class GeneratorTests(unittest.TestCase):
             config = Config(
                 count=15, min_numbers=numbers, max_numbers=numbers, maximum=10, mul_div=mul_div,
                 brackets=brackets, negative=negative, fractions=fractions,
-                remainder=fractions, seed=42,
+                remainder=fractions,
             )
             with self.subTest(config=config):
                 sheet = generate(config)
@@ -83,9 +85,9 @@ class GeneratorTests(unittest.TestCase):
         for brackets, negative, remainder, fractions in product((False, True), repeat=4):
             config = Config(
                 count=100, min_numbers=2, max_numbers=5, maximum=10, mul_div=True,
-                brackets=brackets, negative=negative, remainder=remainder, fractions=fractions, seed=42,
+                brackets=brackets, negative=negative, remainder=remainder, fractions=fractions,
             )
-            with self.subTest(config=config):
+            with self.subTest(config=config), patch("generator.Random", return_value=Random(42)):
                 sheet = generate(config)
                 self.assertEqual(len(sheet.questions), 100)
                 self.assertEqual(len({q.expression for q in sheet.questions}), 100)
@@ -93,14 +95,16 @@ class GeneratorTests(unittest.TestCase):
                 self.assertEqual(any(q.remainder for q in sheet.questions), remainder)
                 self.assertEqual(any(q.value.denominator != 1 for q in sheet.questions), fractions)
 
-    def test_seed_reproduces_entire_worksheet(self):
-        config = Config(count=30, min_numbers=2, max_numbers=5, mul_div=True, brackets=True, fractions=True, negative=True, seed=314)
-        self.assertEqual(generate(config), generate(config))
-        random_sheet = generate(replace(config, seed=None))
-        self.assertEqual(random_sheet.questions, generate(replace(config, seed=random_sheet.seed)).questions)
+    def test_each_generation_uses_fresh_randomness(self):
+        config = Config()
+        with patch("generator.Random", side_effect=(Random(1), Random(2))) as new_random:
+            first = generate(config)
+            second = generate(config)
+        self.assertEqual(new_random.call_args_list, [call(), call()])
+        self.assertNotEqual(first.questions, second.questions)
 
     def test_two_operand_capacity_and_textual_deduplication(self):
-        config = Config(count=9, maximum=2, seed=7)
+        config = Config(count=9, maximum=2)
         sheet = generate(config)
         self.assertEqual(len(sheet.questions), 9)
         self.assertEqual(
@@ -114,7 +118,7 @@ class GeneratorTests(unittest.TestCase):
 
     def test_random_two_operand_generation_obeys_operation_rules(self):
         # This range exceeds the enumeration limit, exercising random candidates.
-        config = Config(count=1000, maximum=100, mul_div=True, negative=True, remainder=True, seed=42)
+        config = Config(count=1000, maximum=100, mul_div=True, negative=True, remainder=True)
         for question in generate(config).questions:
             self.assertEqual(self.check_question(question, config), 2)
 
@@ -127,8 +131,16 @@ class GeneratorTests(unittest.TestCase):
         with self.assertRaisesRegex(GenerationError, "只有 0"):
             generate(replace(config, mul_div=False))
 
+    def test_value_limit_includes_100_and_applies_to_operands(self):
+        sheet = generate(Config(count=2, minimum=100, maximum=100))
+        self.assertEqual(
+            {(q.expression, q.answer) for q in sheet.questions},
+            {("100 + 100", "200"), ("100 - 100", "0")},
+        )
+
     def test_sixteen_operands(self):
-        config = Config(count=5, min_numbers=16, max_numbers=16, minimum=1, maximum=3, brackets=True, seed=19)
+        config = Config(count=5, min_numbers=16, max_numbers=16, minimum=1, maximum=3, brackets=True)
+        self.enterContext(patch("generator.Random", return_value=Random(19)))
         for question in generate(config).questions:
             value, count = self.evaluate(ast.parse(question.expression, mode="eval").body, config, 16)
             self.assertEqual(count, 16)
@@ -136,7 +148,7 @@ class GeneratorTests(unittest.TestCase):
 
     def test_random_attempt_limit_reports_incomplete_without_returning_a_sheet(self):
         with self.assertRaisesRegex(GenerationError, "尝试上限"):
-            generate(Config(count=5, min_numbers=3, max_numbers=3, maximum=0, seed=1))
+            generate(Config(count=5, min_numbers=3, max_numbers=3, maximum=0))
 
     def test_cancellation_before_and_during_generation(self):
         cancel = Event()
@@ -145,15 +157,15 @@ class GeneratorTests(unittest.TestCase):
             generate(Config(), cancel)
         cancel.clear()
         with self.assertRaises(CancelledError):
-            generate(Config(count=10_000, maximum=100_000), cancel, lambda _completed, _total: cancel.set())
+            generate(Config(count=10_000, maximum=100), cancel, lambda _completed, _total: cancel.set())
 
     def test_invalid_configuration(self):
         for kwargs in (
             {"count": 0}, {"count": 10001}, {"count": 1.5},
             {"min_numbers": 1}, {"min_numbers": 17}, {"min_numbers": 2.5},
             {"max_numbers": 1}, {"max_numbers": 17}, {"max_numbers": 2.5},
-            {"min_numbers": 4, "max_numbers": 3}, {"minimum": -1}, {"maximum": 1000001},
-            {"minimum": 10, "maximum": 9}, {"seed": 0}, {"seed": 2147483648},
+            {"min_numbers": 4, "max_numbers": 3}, {"minimum": -1}, {"minimum": 101}, {"maximum": 101},
+            {"minimum": 10, "maximum": 9},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 replace(Config(), **kwargs)

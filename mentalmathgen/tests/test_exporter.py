@@ -21,7 +21,7 @@ class ExporterTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.assertEqual(self.root.resolve().parent, parent)
-        self.sheet = generate(Config(count=60, min_numbers=2, max_numbers=4, mul_div=True, fractions=True, brackets=True, seed=42))
+        self.sheet = generate(Config(count=100, min_numbers=2, max_numbers=4, mul_div=True, fractions=True, brackets=True))
 
     def test_separate_text_files_preserve_order_spacing_and_utf8(self):
         for answers in (False, True):
@@ -33,10 +33,10 @@ class ExporterTests(unittest.TestCase):
             self.assertFalse(raw.endswith(b"\n"))
             separator = "\n" if answers else "\n\n\n"
             lines = text.split(separator)
-            self.assertEqual(len(lines), 60)
+            self.assertEqual(len(lines), 100)
             for index, (line, question) in enumerate(zip(lines, self.sheet.questions), 1):
                 expected = question.answer if answers else f"{question.expression} = ________"
-                self.assertEqual(line, f"{index}. {expected}")
+                self.assertEqual(line, f"{index:3}. {expected}")
 
     def test_pdf_chinese_fonts_pagination_and_separate_content(self):
         for answers in (False, True):
@@ -48,13 +48,14 @@ class ExporterTests(unittest.TestCase):
             assert metadata is not None
             self.assertEqual(metadata.title, "参考答案" if answers else "口算练习")
             all_text = "\n".join(page.extract_text() for page in reader.pages)
+            self.assertNotIn("种子", all_text)
             for index, question in enumerate(self.sheet.questions, 1):
                 expected = question.answer if answers else f"{question.expression} = ________"
                 self.assertIn(f"{index}. {expected}\n", all_text)
             if answers:
                 self.assertNotIn("________", all_text)
             else:
-                self.assertEqual(all_text.count("= ________"), 60)
+                self.assertEqual(all_text.count("= ________"), 100)
             for index, page in enumerate(reader.pages, 1):
                 self.assertIn(f"第 {index} 页", page.extract_text())
                 resources = page["/Resources"]
@@ -73,7 +74,7 @@ class ExporterTests(unittest.TestCase):
 
     def test_long_questions_wrap_without_losing_text(self):
         expression = " + ".join(["1000000"] * 16)
-        sheet = Worksheet(Config(count=2, min_numbers=16, max_numbers=16), (Question(expression, Fraction(16000000)),) * 2, 1)
+        sheet = Worksheet(Config(count=2, min_numbers=16, max_numbers=16), (Question(expression, Fraction(16000000)),) * 2)
         path = self.root / "long.pdf"
         export_pdf(sheet, path, spacing=100)
         reader = PdfReader(path)
